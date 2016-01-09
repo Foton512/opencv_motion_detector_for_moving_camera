@@ -76,6 +76,8 @@ void processVideo() {
     std::vector<KeyPoint> prevKeypoints, keypoints;
     Mat prevDescriptors, descriptors;
     Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create("BruteForce-Hamming");
+    deque<Point> movementCenters;
+    deque<Point> motionVectors;
 
     const double firstTwoCloseMatchesDiff = 0.8;
     const double maxMatchHeightDiff = 20;
@@ -83,6 +85,8 @@ void processVideo() {
     const int binaryThreshold = 70;
     Mat erodeElement = getStructuringElement(MORPH_RECT, Size(4, 4));
     Mat dilateElement = getStructuringElement(MORPH_RECT, Size(24, 24));
+    const int movementCentersQueueSize = 4;
+    const double movingFramesFract = 0.5;
 
     while (true) {
         capture.read(colorFrame);
@@ -105,9 +109,10 @@ void processVideo() {
             if (matches[i][0].distance > firstTwoCloseMatchesDiff * matches[i][1].distance) {
                 continue;
             }
-            const auto& prevPoint = prevKeypoints[matches[i][0].queryIdx].pt;
-            const auto& point = keypoints[matches[i][0].trainIdx].pt;
-            if (fabs(point.y - prevPoint.y) > maxMatchHeightDiff || fabs(point.x - prevPoint.x) > maxMatchHorizontalDiff) {
+            const auto &prevPoint = prevKeypoints[matches[i][0].queryIdx].pt;
+            const auto &point = keypoints[matches[i][0].trainIdx].pt;
+            if (fabs(point.y - prevPoint.y) > maxMatchHeightDiff ||
+                fabs(point.x - prevPoint.x) > maxMatchHorizontalDiff) {
                 continue;
             }
             prevFilteredPoints.push_back(prevPoint);
@@ -142,13 +147,38 @@ void processVideo() {
         dilate(movement, movement, dilateElement, Point(-1, -1), 2);
 
         Moments movementMoments = moments(movement, true);
-        circle(
-                colorFrame,
-                Point(movementMoments.m10 / movementMoments.m00, movementMoments.m01 / movementMoments.m00),
-                10,
-                Scalar(0, 255, 0),
-                -1
-        );
+        if (movementMoments.m00 > 0) {
+            const auto movementCenter = Point(movementMoments.m10 / movementMoments.m00,
+                                              movementMoments.m01 / movementMoments.m00);
+            movementCenters.push_back(movementCenter);
+        } else {
+            movementCenters.push_back(Point(-1, -1));
+        }
+        if (movementCenters.size() > movementCentersQueueSize) {
+            movementCenters.pop_front();
+        }
+
+        Point averageCenter(0, 0);
+        int movingFrames = 0;
+        for (const auto& center: movementCenters) {
+            if (center.x != -1) {
+                ++movingFrames;
+                averageCenter.x += center.x;
+                averageCenter.y += center.y;
+            }
+        }
+        if (double(movingFrames) / movementCenters.size() >= movingFramesFract) {
+            averageCenter.x /= movingFrames;
+            averageCenter.y /= movingFrames;
+
+            circle(
+                    colorFrame,
+                    averageCenter,
+                    10,
+                    Scalar(0, 255, 0),
+                    -1
+            );
+        }
 
         Mat contoursImage = movement.clone();
 
